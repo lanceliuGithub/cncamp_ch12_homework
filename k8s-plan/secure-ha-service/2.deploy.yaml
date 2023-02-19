@@ -1,0 +1,74 @@
+#-------------------------------
+#  HTTP服务器的部署对象
+#-------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myhttpserver-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: myhttpserver
+
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+      labels:
+        app: myhttpserver
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: myhttpserver
+          imagePullPolicy: Always
+          image: lanceliu2022/myhttpserver:1.0-metrics
+
+          resources:
+            # QoS保证：Guaranteed
+            limits:
+              cpu: 100m
+              memory: 100Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+
+          # 配置和代码分离
+          volumeMounts:
+            - name: myhttpserver-config
+              mountPath: /conf
+              readOnly: true
+          args:
+            - -c
+            - /conf/config.json
+          ports:
+            - name: liveness-port
+              containerPort: 8888
+              #hostPort: 80
+
+          # 优雅启动、探活
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: liveness-port
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: liveness-port
+            failureThreshold: 1
+            periodSeconds: 10
+
+          # 优雅终止
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "kill -SIGTERM `pidof myhttpserver`"]
+
+      volumes:
+        - name: myhttpserver-config
+          configMap:
+            name: myhttpserver-config
+            defaultMode: 400

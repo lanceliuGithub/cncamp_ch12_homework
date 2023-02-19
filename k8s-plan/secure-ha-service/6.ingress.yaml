@@ -1,0 +1,25 @@
+#-------------------------------
+#  HTTP服务器的Ingress对象
+#-------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myhttpserver-gateway
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  tls:
+    - hosts:
+        - lancelot.cn
+      secretName: myhttpserver-cert
+  rules:
+    - host: lancelot.cn
+      http:
+        paths:
+          - path: "/"
+            pathType: Prefix
+            backend:
+              service:
+                name: myhttpserver-service
+                port:
+                  number: 80
