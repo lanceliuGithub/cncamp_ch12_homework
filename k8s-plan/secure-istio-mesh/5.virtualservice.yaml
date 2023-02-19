@@ -1,0 +1,20 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: myhttpserver-vs-https
+spec:
+  gateways:
+    - myhttpserver-gw-https
+  hosts:
+    - myhttp.example.com
+  http:
+    - match:
+        - uri:
+            prefix: /healthz
+          uri:
+            prefix: /
+      route:
+        - destination:
+            host: myhttpserver-service.secspace.svc.cluster.local
+            port:
+              number: 80

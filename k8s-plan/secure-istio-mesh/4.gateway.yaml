@@ -1,0 +1,17 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: myhttpserver-gw-https
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts:
+        - myhttp.example.com
+      port:
+        name: https-default
+        number: 443
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: myhttp-credential

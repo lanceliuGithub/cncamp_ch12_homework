@@ -263,3 +263,172 @@ histogram_quantile(0.95, sum(rate(default_execution_latency_seconds_bucket[5m]))
 histogram_quantile(0.90, sum(rate(default_execution_latency_seconds_bucket[5m])) by (le))
 histogram_quantile(0.50, sum(rate(default_execution_latency_seconds_bucket[5m])) by (le))
 ```
+
+# 接入Istio 
+
+## 安装istio
+
+查看kubernetes版本
+```
+kubectl version
+```
+
+选择合适的istio版本
+
+Support status of Istio releases
+
+[https://istio.io/latest/docs/releases/supported-releases/#support-status-of-istio-releases](https://istio.io/latest/docs/releases/supported-releases/#support-status-of-istio-releases)
+
+支持 kubernetes 1.22 的最新 istio 版本是 1.16.2
+
+下载istio安装文件
+```
+curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.16.2 TARGET_ARCH=x86_64 sh -
+```
+
+设置istio环境变量
+```
+cat <<-EOF >/etc/profile.d/istio.sh
+export PATH="$PATH:/root/istio-1.16.2/bin"
+EOF
+source /etc/profile.d/istio.sh
+```
+
+安装istio的预检查
+```
+istioctl x precheck
+```
+
+安装istio
+```
+istioctl manifest apply --set profile=demo -y
+```
+
+安装istio后的确认
+```
+istioctl verify-install
+```
+
+## 为应用部署安全网关
+
+生成新的命名空间，并打上自动注入istio的标签
+```
+kubectl create ns secspace
+kubectl label ns secspace istio-injection=enabled
+```
+
+为服务创建根证书和私钥
+```
+openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=example.com' -keyout example.com.key -out example.com.crt
+```
+
+为 myhttp.example.com 服务创建证书和私钥
+```
+openssl req -out myhttp.example.com.csr -newkey rsa:2048 -nodes -keyout myhttp.example.com.key -subj "/CN=myhttp.example.com/O=myhttp organization"
+openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 0 -in myhttp.example.com.csr -out myhttp.example.com.crt
+```
+
+为入口网关准备待使用的证书
+```
+kubectl create -n istio-system secret tls myhttp-credential --key=myhttp.example.com.key --cert=myhttp.example.com.crt
+```
+
+部署应用、服务、网关、虚拟服务
+```
+cd k8s-plan/secure-istio-mesh
+
+kubectl apply -n secspace \
+  -f 1.config.yaml \
+  -f 2.deploy.yaml \
+  -f 3.service.yaml \
+  -f 4.gateway.yaml \
+  -f 5.virtualservice.yaml
+```
+
+配置文件 4.gateway.yaml
+```
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: myhttpserver-gw-https
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - hosts:
+        - myhttp.example.com
+      port:
+        name: https-default
+        number: 443
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: myhttp-credential
+```
+
+配置文件 5.virtualservice.yaml
+```
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: myhttpserver-vs-https
+spec:
+  gateways:
+    - myhttpserver-gw-https
+  hosts:
+    - myhttp.example.com
+  http:
+    - match:
+        - uri:
+            prefix: /healthz
+          uri:
+            prefix: /
+      route:
+        - destination:
+            host: myhttpserver-service.secspace.svc.cluster.local
+            port:
+              number: 80
+```
+
+## 访问测试
+
+获取默认ingress网关IP
+```
+INGRESS_GW_IP=$(kubectl get svc istio-ingressgateway -n istio-system -ojson | jq -r '.spec.clusterIP')
+```
+
+发起请求
+```
+curl -H Host:myhttp.example.com \
+--resolve myhttp.example.com:443:$INGRESS_GW_IP \
+--cacert example.com.crt "https://myhttp.example.com/healthz"
+```
+
+## 链路追踪 Tracing
+
+安装 Jaeger
+```
+kubectl apply -f 6.tracing-jaeger.yaml
+```
+
+配置采样比例
+```
+kubectl edit configmap istio -n istio-system
+
+```
+
+```
+apiVersion: v1
+data:
+  mesh: |-
+    accessLogFile: /dev/stdout
+    defaultConfig:
+      discoveryAddress: istiod.istio-system.svc:15012
+      proxyMetadata: {}
+      tracing:
+        sampling: 100
+        zipkin:
+          address: zipkin.istio-system:9411
+    enablePrometheusMerge: true
+```
+
